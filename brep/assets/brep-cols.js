@@ -8,7 +8,8 @@
   var GRIDS = {
     "g-sum": { key: "brep.cols.sum.v1", order: false, fit: false },  // колонки лет не переставляются
     "g-i": { key: "brep.cols.ins.v1", order: true, fit: true },
-    "g-d": { key: "brep.cols.day.v1", order: true, fit: true }
+    "g-d": { key: "brep.cols.day.v1", order: true, fit: true },
+    "g-sec": { key: "brep.cols.sec.v1", order: false, fit: true }   // группы колонок не переставляются
   };
   var KEEP = ["colId", "width", "flex", "hide", "pinned"];
 

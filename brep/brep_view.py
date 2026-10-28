@@ -23,12 +23,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 THEME = ("themeQuartz.withParams({accentColor: 'var(--acc)', backgroundColor: 'var(--card)', "
          "foregroundColor: 'var(--txt)', headerBackgroundColor: 'var(--hdr)', chromeBackgroundColor: 'var(--hdr)', "
          "oddRowBackgroundColor: 'var(--odd)', borderColor: 'var(--line)', rowHoverColor: 'var(--hover)', "
-         "inputBackgroundColor: 'var(--bg)', fontSize: 12.5, headerFontWeight: 650, wrapperBorderRadius: 10, "
-         "spacing: 5})")
-GRID = {"theme": {"function": THEME}, "rowHeight": 28, "headerHeight": 32, "animateRows": False,
+         "inputBackgroundColor: 'var(--bg)', fontSize: 12.5, headerFontWeight: 600, headerFontSize: 12, "
+         "headerTextColor: 'var(--htxt)', headerRowBorder: {color: 'var(--hline)'}, "
+         "headerColumnResizeHandleColor: 'var(--line)', wrapperBorderRadius: 10, spacing: 5})")
+GRID = {"theme": {"function": THEME}, "rowHeight": 28, "headerHeight": 34, "groupHeaderHeight": 28,
+        "animateRows": False,
         "tooltipShowDelay": 200, "enableCellTextSelection": True,
         "rowClassRules": {"tot": "params.node.rowPinned === 'bottom'"}}
-DEF = {"sortable": True, "resizable": True, "filter": True, "floatingFilter": True, "suppressHeaderMenuButton": True,
+DEF = {"sortable": True, "resizable": True, "filter": True, "floatingFilter": False, "suppressHeaderMenuButton": True,
        "wrapHeaderText": True, "autoHeaderHeight": True}
 SIGN = {"neg": "params.value < 0", "pos": "params.value > 0"}
 LINKS = []   # внешние ссылки в шапке окна: (подпись, адрес, подсказка)
@@ -110,17 +112,17 @@ def summary_table(cols_data):
 
 
 DAY_COLS = [
-    {"field": "date", "headerName": "Дата", "pinned": "left", "width": 124, "minWidth": 124, "sort": "desc",
+    {"field": "date", "headerName": "Дата", "pinned": "left", "width": 118, "minWidth": 118, "sort": "desc",
      "valueFormatter": {"function": "params.data && params.data.lab ? params.data.lab : ruDate(params.value)"}},
-    money("equity", "Стоимость счёта", w=130, tooltipField="eq_tip",
+    money("equity", "Стоимость счёта", w=118, tooltipField="eq_tip",
           cellClassRules={"est": "params.data && params.data.exact === false"},
           tip="точно — на день справки; курсивом — оценка по деньгам дня"),
-    money("result", "Результат", sign=True, w=112, tip="ВМ − комиссии + доходы (без налогов, ввода/вывода)"),
-    money("vm", "ВМ", sign=True, w=110), money("broker", "Брокер", sign=True, w=96), money("exch", "Биржа", sign=True, w=96),
-    money("income", "Доходы", sign=True, w=92), money("tax", "Налоги", sign=True, w=92),
-    money("flow", "Ввод/вывод", sign=True, w=110), money("lots", "Лоты", w=92), money("deals", "Сделки", w=84),
-    money("go", "ГО", w=118, tip="на конец дня (неделя/месяц — максимум)"),
-    pct("go_pct", "ГО/счёт", tip="на конец дня (неделя/месяц — максимум)"),
+    money("result", "Результат", sign=True, w=104, tip="ВМ − комиссии + доходы (без налогов, ввода/вывода)"),
+    money("vm", "ВМ", sign=True, w=100), money("broker", "Брокер", sign=True, w=92), money("exch", "Биржа", sign=True, w=96),
+    money("income", "Доходы", sign=True, w=88), money("tax", "Налоги", sign=True, w=88),
+    money("flow", "Ввод/вывод", sign=True, w=100), money("lots", "Лоты", w=86), money("deals", "Сделки", w=78),
+    money("go", "ГО", w=108, tip="на конец дня (неделя/месяц — максимум)"),
+    dict(pct("go_pct", "ГО / счёт", tip="на конец дня (неделя/месяц — максимум)"), minWidth=78),
 ]
 
 INS_COLS = [
@@ -140,20 +142,21 @@ def _qty(field, name, w=92):
 
 # ── ценные бумаги (облигации, акции, фонды — по ISIN): позиция на границах справок + деньги и сделки периода ──
 SEC_COLS = [
-    {"field": "name", "headerName": "Бумага", "pinned": "left", "width": 118, "minWidth": 110, "tooltipField": "isin"},
-    {"field": "isin", "headerName": "ISIN", "width": 116, "minWidth": 110},
-    {"headerName": "На начало", "children": [_qty("q0", "шт.", 76), money("v0", "оценка, ₽", w=108,
+    {"field": "name", "headerName": "Бумага", "pinned": "left", "width": 104, "minWidth": 104, "tooltipField": "isin"},
+    {"field": "isin", "headerName": "ISIN", "width": 108, "minWidth": 108},
+    {"headerName": "На начало", "children": [_qty("q0", "шт.", 66), money("v0", "оценка, ₽", w=96,
                                                                          tip="оценка брокера с НКД, включая непоставленное и выданное в займ")]},
-    {"headerName": "Куплено", "children": [_qty("bq", "шт.", 76), money("b", "₽", w=108)]},
-    {"headerName": "Продано", "children": [_qty("sq", "шт.", 76), money("s", "₽", w=108)]},
-    money("red", "Погашено, ₽", w=100, tip="погашение облигаций (номинал) по дате выплаты"),
-    money("inc", "Купоны, дивиденды, ₽", w=108, tip="до удержания налога (налог — в сводке, «Налоги»)"),
-    money("cost", "Комиссии, ₽", sign=True, w=94,
+    {"headerName": "Куплено", "children": [_qty("bq", "шт.", 66), money("b", "₽", w=96)]},
+    {"headerName": "Продано", "children": [_qty("sq", "шт.", 66), money("s", "₽", w=96)]},
+    money("red", "Погашено, ₽", w=92, tip="погашение облигаций (номинал) по дате выплаты"),
+    money("inc", "Купоны, дивиденды, ₽", w=88, tip="до удержания налога (налог — в сводке, «Налоги»)"),
+    money("cost", "Комиссии, ₽", sign=True, w=80,
           tip="брокер (комиссия дня делится по объёму сделок дня) + депозитарий за выплату дохода"),
-    {"headerName": "На конец", "children": [_qty("q1", "шт.", 76), money("v1", "оценка, ₽", w=108)]},
-    money("result", "Результат, ₽", sign=True, w=112,
+    {"headerName": "На конец", "children": [_qty("q1", "шт.", 66), money("v1", "оценка, ₽", w=96)]},
+    money("result", "Результат, ₽", sign=True, w=100,
           tip="оценка на конец − на начало + продажи − покупки + погашения + купоны/дивиденды + комиссии"),
-    {"field": "chk", "headerName": "Кол-во", "width": 74, "minWidth": 70, "tooltipField": "chk_tip",
+    {"field": "chk", "headerName": "Кол‑во", "width": 58, "minWidth": 58, "tooltipField": "chk_tip",
+     "cellStyle": {"textAlign": "center"}, "headerClass": "hc",
      "cellClassRules": {"bad": "params.value && params.value !== '✓'", "ok": "params.value === '✓'"}},
 ]
 

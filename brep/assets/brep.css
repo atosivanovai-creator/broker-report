@@ -1,6 +1,7 @@
 :root{--bg:#0a0e15;--card:#111722;--line:#1f2938;--txt:#e6ebf3;--mut:#8e9ab0;--acc:#22c3ee;
 --hdr:color-mix(in srgb,var(--card),var(--txt) 6%);--odd:color-mix(in srgb,var(--card),var(--txt) 2.5%);
---hover:color-mix(in srgb,var(--card),var(--acc) 12%);--okt:#5ee0a0;--badt:#ff6b7a}
+--hover:color-mix(in srgb,var(--card),var(--acc) 12%);--okt:#5ee0a0;--badt:#ff6b7a;
+--htxt:color-mix(in srgb,var(--txt) 72%,var(--mut));--hline:color-mix(in srgb,var(--line),var(--acc) 45%)}
 html,body{background:var(--card)}
 body{margin:0;color:var(--txt);font:13px/1.4 "IBM Plex Sans",system-ui,Segoe UI,Roboto,sans-serif}
 .page{padding:8px 12px 24px}
@@ -32,5 +33,21 @@ footer{color:var(--mut);font-size:12px}footer p{margin:3px 0}
 .g .tot,.g .totc{font-weight:650}
 .g .sec{font-weight:700;color:var(--acc);letter-spacing:.06em;font-size:11.5px}
 .g .ag-cell{padding-left:8px;padding-right:8px}
+/* шапки таблиц: подпись по центру высоты (перенос — до 2 строк), группы — по центру своих колонок с линией,
+   фильтр — значком, виден при наведении на шапку и всегда, когда фильтр включён */
+.g .ag-header-cell-label,.g .ag-header-group-cell-label{align-items:center}
+.g .ag-header-cell-text{line-height:1.25;letter-spacing:.01em;word-break:normal;overflow-wrap:normal;hyphens:none}
+.g .ag-right-aligned-header .ag-header-cell-text{text-align:right}
+.g .hc{padding-left:4px;padding-right:4px}.g .hc .ag-header-cell-label{justify-content:center}
+.g .ag-header-group-cell-with-group .ag-header-group-cell-label{justify-content:center}
+.g .ag-header-group-cell-with-group{color:var(--txt);font-weight:650}
+.g .ag-header-group-cell-with-group .ag-header-group-cell-label{margin:0 4px;padding:3px 0 4px;
+border-bottom:2px solid color-mix(in srgb,var(--line),var(--acc) 55%)}
+.g .ag-header-cell-filter-button{position:absolute;top:50%;right:4px;transform:translateY(-50%);margin:0;opacity:0;
+transition:opacity .12s;background:var(--hdr);border-radius:4px}
+.g .ag-right-aligned-header .ag-header-cell-filter-button{right:auto;left:4px}   /* подпись справа — значок слева */
+.g .ag-header-cell:hover .ag-header-cell-filter-button,.g .ag-header-cell-filter-button.ag-filter-active,
+.g .ag-header-cell-filtered .ag-header-cell-filter-button{opacity:1}
+.g .ag-header-cell-filtered .ag-header-cell-text{color:var(--acc)}
 .ag-layout-auto-height .ag-center-cols-viewport,.ag-layout-auto-height .ag-center-cols-container,
 .ag-layout-auto-height .ag-center-cols-clipper{min-height:0!important}
