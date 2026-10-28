@@ -206,7 +206,65 @@ def parse_report(text: str, name: str = "") -> dict:
                                             and i["comment"] == "удержан при выплате дохода")
     if abs(rest) > 0.005:
         add(r["to"], KIND_TAX, rest, "", "удержан при выплате дохода; в справке только итогом за период, без даты", "итог справки")
+    r["fx"] = pick("Оценка валютной")
+    r["papers"] = papers(tabs, r)
     return r
+
+
+ISIN = re.compile(r"\b([A-Z]{2}[A-Z0-9]{9}\d)\b")
+
+
+def papers(tabs, r: dict) -> dict:
+    """Ценные бумаги по ISIN (любого вида: облигации, акции, фонды): позиции на начало/конец, сделки по номеру,
+    комиссии брокера за день, зачисления/списания бумаг без сделок. Деньги в `items` не трогает (сверка — как была)."""
+    p = {"hold": {}, "tot": [0.0, 0.0], "trades": {}, "comm": {}, "moves": []}
+    for row in _find(tabs, "позиции по ценным бумагам"):
+        if len(row) >= 11 and ISIN.fullmatch(row[2] or ""):
+            p["hold"][row[2]] = {"name": row[0], "short": row[1], "q0": num(row[3]), "v0": num(row[5]),
+                                 "cr": num(row[6]), "db": num(row[7]), "q1": num(row[8]), "v1": num(row[10])}
+        elif row and row[0].startswith("ИТОГО") and len(row) >= 11:
+            p["tot"] = [num(row[5]), num(row[10])]
+        elif len(row) >= 3 and ISIN.fullmatch(row[2] or ""):
+            r["unknown"][f"позиции бумаг: {len(row)} ячеек"] = r["unknown"].get(f"позиции бумаг: {len(row)} ячеек", 0) + 1
+    for row in _find(tabs, "в качестве ценных бумаг (включая незавершенные"):
+        if len(row) < 20 or not DATE.match(row[0]):
+            continue
+        if row[4] in ("Покупка", "Продажа"):
+            cur = row[11] if len(row) > 11 else ""
+            if cur and cur != "Рубль":
+                r["unknown"]["бумаги: расчёты в " + cur] = r["unknown"].get("бумаги: расчёты в " + cur, 0) + 1
+                continue
+            no = (row[25] if len(row) > 25 else "") or f"{row[0]}{row[1]}{row[3]}{row[4]}{row[5]}{row[6]}"   # 25 — № сделки
+            # позиция справки — по ПОСТАВКЕ: сделка 30.12 с поставкой 03.01 входит в позицию следующего года
+            fact = next((iso(row[i]) for i in (21, 20) if len(row) > i and iso(row[i])), None)   # поставка/оплата: факт
+            plan = next((iso(row[i]) for i in (19, 18) if len(row) > i and iso(row[i])), None)   # поставка/оплата: план
+            p["trades"][no] = [iso(row[0]), row[3] or row[2], 1 if row[4] == "Покупка" else -1, num(row[5]),
+                               num(row[13]), fact, plan]
+        elif row[4] == "Комиссия брокерская":
+            d = iso(row[0])
+            p["comm"][d] = round(p["comm"].get(d, 0.0) - num(row[14]), 2)
+    for row in _find(tabs, "не квалифицированными в качестве ценных бумаг, и производными"):
+        if len(row) >= 6 and DATE.match(row[0]) and ISIN.fullmatch(row[3] or ""):
+            p["moves"].append([iso(row[0]), row[3], row[2], num(row[4]), num(row[5])])
+    # Плановые позиции по незавершённым сделкам: бумаги, купленные/проданные без поставки, и бумаги, выданные брокеру
+    # в займ (возврат по плану). «Плановый остаток» = позиция + непоставленное; оценка — только непоставленной части.
+    p["plan"], p["req_sec"] = {}, [0.0, 0.0]
+    for row in _find(tabs, "Оценка обязательств по незавершенным сделкам"):
+        if len(row) >= 10 and ISIN.fullmatch(row[2] or ""):
+            p["plan"][row[2]] = [num(row[3]), num(row[4]), num(row[8]), num(row[9])]
+            if len(row) >= 13:          # деньги по непоставленным бумагам, руб. (7 — начало, 12 — конец)
+                p["req_sec"] = [round(p["req_sec"][0] + num(row[7]), 2), round(p["req_sec"][1] + num(row[12]), 2)]
+    # Сделки по Регламенту (займ ЦБ брокеру): бумага уходит и возвращается, деньги не движутся — в количестве и
+    # результате не участвуют (бумага на займе видна плановым остатком). Прочие операции этой таблицы — нераспознанные.
+    p["lend"] = 0
+    for row in _find(tabs, "в тексте Регламента брокерского обслуживания"):
+        if len(row) > 4 and DATE.match(row[0]):
+            if row[4] in ("Выдача займа ЦБ", "Возврат выданного займа ЦБ"):
+                p["lend"] += 1
+            else:
+                k = "сделки по Регламенту: " + row[4]
+                r["unknown"][k] = r["unknown"].get(k, 0) + 1
+    return p
 
 
 # какие виды строк соответствуют колонкам итогов брокера

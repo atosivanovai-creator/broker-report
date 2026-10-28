@@ -15,6 +15,7 @@ import dash_ag_grid as dag
 from dash import Dash, Input, Output, dcc, html, no_update
 
 from .brep_model import Store, ru
+from .brep_parse import day_after as bp_day_after
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -132,6 +133,51 @@ INS_COLS = [
 ]
 
 
+def _qty(field, name, w=92):
+    return {"field": field, "headerName": name, "type": "rightAligned", "filter": "agNumberColumnFilter", "width": w,
+            "minWidth": w, "valueFormatter": {"function": "rub(params.value, 0)"}}
+
+
+# ── ценные бумаги (облигации, акции, фонды — по ISIN): позиция на границах справок + деньги и сделки периода ──
+SEC_COLS = [
+    {"field": "name", "headerName": "Бумага", "pinned": "left", "width": 118, "minWidth": 110, "tooltipField": "isin"},
+    {"field": "isin", "headerName": "ISIN", "width": 116, "minWidth": 110},
+    {"headerName": "На начало", "children": [_qty("q0", "шт.", 76), money("v0", "оценка, ₽", w=108,
+                                                                         tip="оценка брокера с НКД, включая непоставленное и выданное в займ")]},
+    {"headerName": "Куплено", "children": [_qty("bq", "шт.", 76), money("b", "₽", w=108)]},
+    {"headerName": "Продано", "children": [_qty("sq", "шт.", 76), money("s", "₽", w=108)]},
+    money("red", "Погашено, ₽", w=100, tip="погашение облигаций (номинал) по дате выплаты"),
+    money("inc", "Купоны, дивиденды, ₽", w=108, tip="до удержания налога (налог — в сводке, «Налоги»)"),
+    money("cost", "Комиссии, ₽", sign=True, w=94,
+          tip="брокер (комиссия дня делится по объёму сделок дня) + депозитарий за выплату дохода"),
+    {"headerName": "На конец", "children": [_qty("q1", "шт.", 76), money("v1", "оценка, ₽", w=108)]},
+    money("result", "Результат, ₽", sign=True, w=112,
+          tip="оценка на конец − на начало + продажи − покупки + погашения + купоны/дивиденды + комиссии"),
+    {"field": "chk", "headerName": "Кол-во", "width": 74, "minWidth": 70, "tooltipField": "chk_tip",
+     "cellClassRules": {"bad": "params.value && params.value !== '✓'", "ok": "params.value === '✓'"}},
+]
+
+
+def sec_rows(sec):
+    rows = []
+    for r in sec["rows"]:
+        rows.append(dict(r, cost=round(r["comm"] + r["depo"], 2), chk="✓" if r["ok"] else f"⚠ {r['dq']:+,.0f}".replace(",", " "),
+                         chk_tip="на начало + куплено − продано + зачислено − списано = на конец" if r["ok"] else
+                         f"не сошлось на {r['dq']:+g} шт.: в справке была операция с бумагой, которую разбор не знает — "
+                         "результат по этой бумаге неточен"))
+    if sec["fx"]:
+        cur = sorted({c[:3] for c in sec["fx"]["isin"].split(", ") if c})
+        rows.append(dict(sec["fx"], name="Валюта", isin=", ".join(cur), q0=None, q1=None, bq=None, sq=None, chk="",
+                         cost=None, chk_tip="валютная позиция по курсу ЦБ на концах справок + покупки и продажи валюты"))
+    if sec["comm_unalloc"] or sec["cash_unalloc"]:
+        rows.append({"name": "без привязки", "isin": "", "cost": sec["comm_unalloc"], "inc": sec["cash_unalloc"],
+                     "result": round(sec["comm_unalloc"] + sec["cash_unalloc"], 2), "chk": ""})
+    tot = {"name": "Итого", "isin": ""}
+    for f in ("v0", "b", "s", "red", "inc", "cost", "v1", "result"):
+        tot[f] = round(sum(r.get(f) or 0 for r in rows), 2)
+    return rows, [tot]
+
+
 def _wkey(d: str, mode: str) -> str:
     if mode == "week":
         x = dt.date.fromisoformat(d)
@@ -209,6 +255,11 @@ def mount(server, url_base: str, account: str, reports_dir: str, cache_dir: str,
                # columnSize="responsiveSizeToFit" (он же затирал ширины, заданные вручную)
                dag.AgGrid(id="g-i", columnDefs=INS_COLS, defaultColDef=DEF,
                           dashGridOptions=dict(GRID, domLayout="autoHeight"), className="g", style={"height": "auto"})),
+        html.Div(_block("Ценные бумаги", "облигации, акции, фонды — по ISIN; позиция и оценка — на концах справок",
+                        dag.AgGrid(id="g-sec", columnDefs=SEC_COLS, defaultColDef=DEF,
+                                   dashGridOptions=dict(GRID, domLayout="autoHeight"), className="g",
+                                   style={"height": "auto"}),
+                        html.Div(id="sec-notes", className="notes")), id="sec-wrap", style={"display": "none"}),
         _block("По дням", "стоимость счёта точна в дни справок, между ними (курсив) — оценка",
                html.Div([dcc.RadioItems(id="d-mode", options=[{"label": "день", "value": "day"},
                                                               {"label": "неделя", "value": "week"},
@@ -307,5 +358,30 @@ def mount(server, url_base: str, account: str, reports_dir: str, cache_dir: str,
     @app.callback(Output("g-d", "exportDataAsCsv"), Input("d-csv", "n_clicks"), prevent_initial_call=True)
     def _csv(_):
         return True
+
+
+    @app.callback(Output("g-sec", "rowData"), Output("g-sec", "dashGridOptions"), Output("sec-notes", "children"),
+                  Output("sec-wrap", "style"), Input("d-from", "value"), Input("d-to", "value"))
+    def _sec(a, b):
+        acc = acc_or_none()
+        hide = {"display": "none"}
+        if acc is None or not acc.reports or not (acc.p_names or acc.p_trades or acc.p_fx):
+            return [], dict(GRID, domLayout="autoHeight"), "", hide       # бумаг за всю историю нет — блок не показываем
+        a, b = rng(acc, a, b)
+        sec = acc.securities(a, b)
+        if sec is None:
+            return [], dict(GRID, domLayout="autoHeight"), "за выбранный период справок нет", {}
+        rows, pin = sec_rows(sec)
+        notes = [f"По справкам: {ru(bp_day_after(sec['from']))} – {ru(sec['to'])}. Позиция — «плановый остаток» брокера: "
+                 "с купленным, но ещё не поставленным, и с бумагами, выданными брокеру в займ; сделки — по дате сделки."]
+        if sec["lend"]:
+            notes.append(f"Займ ЦБ брокеру: {sec['lend']} операций выдачи/возврата за всё время — в количестве и "
+                         "результате не участвуют (бумага на займе остаётся вашей).")
+        if sec["bad"]:
+            notes.append("⚠ Количество не сошлось: " + ", ".join(sec["bad"]) + " — результат по ним неточен.")
+        if sec["unknown"]:
+            notes.append("⚠ Не распознано строк справок: " + "; ".join(f"{k} — {v}" for k, v in sec["unknown"].items()))
+        return rows, dict(GRID, domLayout="autoHeight", pinnedBottomRowData=pin), \
+            [html.P(n, className="bad" if n.startswith("⚠") else None) for n in notes], {}
 
     return app, store

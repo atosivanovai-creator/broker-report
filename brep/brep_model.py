@@ -19,12 +19,13 @@ import datetime as dt
 import glob
 import json
 import os
+import re
 import threading
 from collections import defaultdict
 
 from . import brep_parse as bp
 
-CACHE_V = 2          # 2: lots_late — сделки, оплаченные позже даты сделки (склейка справок)
+CACHE_V = 3          # 2: lots_late (склейка справок); 3: papers — бумаги по ISIN, валюта, unknown; req без денег по бумагам
 INCOME = (bp.KIND_COUPON, bp.KIND_INTEREST)
 FLOWS = (bp.KIND_IN, bp.KIND_OUT, bp.KIND_TR)
 
@@ -61,7 +62,10 @@ def compact(r: dict) -> dict:
     rnd = lambda x: round(x, 2)  # noqa: E731
     return {
         "file": r["file"], "from": r["from"], "to": r["to"], "account": r["account"],
-        "equity": r["equity"], "go": r["go"], "req": r["req"], "recon": r["recon"],
+        "equity": r["equity"], "go": r["go"], "recon": r["recon"],
+        # «Оценка требований и обязательств» без денег по непоставленным БУМАГАМ: по ней сводка доначисляет ВМ
+        # (начисленная, но не оплаченная), а деньги за бумагу 30.12 с оплатой 03.01 — не ВМ (их учитывает блок бумаг)
+        "req": [round(x - y, 2) for x, y in zip(r["req"], (r.get("papers") or {}).get("req_sec", [0.0, 0.0]))],
         "day_kind": {d: {k: rnd(v) for k, v in kv.items()} for d, kv in day_kind.items()},
         "day_ins": {d: {c: [rnd(a), rnd(b)] for c, (a, b) in cv.items()} for d, cv in day_ins.items()},
         "broker_pfi": {d: rnd(v) for d, v in broker_pfi.items()},
@@ -69,7 +73,45 @@ def compact(r: dict) -> dict:
         "lots_open": {d: {c: v for c, v in cv.items()} for d, cv in lots_open.items()},
         "lots_late": {p: {d: {c: v for c, v in cv.items()} for d, cv in dv.items()} for p, dv in lots_late.items()},
         "go_ch": {d: rnd(v) for d, v in go.items()},
+        "papers": compact_papers(r), "unknown": dict(r.get("unknown", {})),
     }
+
+
+def _pname(name: str, short: str) -> str:
+    """Подпись бумаги: краткое имя брокера, иначе «ОФЗ 26229» из «МинФин России, Обл, 229, 26229RMFS», иначе имя."""
+    if short:
+        return short
+    m = re.search(r"\b(\d{5})RMFS\b", name or "")
+    return f"ОФЗ {m.group(1)}" if m else (name or "")
+
+
+def compact_papers(r: dict) -> dict:
+    """Бумаги справки для отчёта: позиции, сделки, комиссии, движения + деньги по бумагам из `items`
+    (купоны/дивиденды, погашения, депозитарий за выплату — с ISIN из комментария или по имени бумаги)."""
+    p = r.get("papers") or {"hold": {}, "tot": [0.0, 0.0], "trades": {}, "comm": {}, "moves": []}
+    names = {i: h["name"] for i, h in p["hold"].items()}
+    for t in p["trades"].values():
+        names.setdefault(t[1], "")
+    by_name = sorted(((n, i) for i, n in names.items() if n), key=lambda x: -len(x[0]))
+    cash = []
+    for i in r["items"]:
+        k, c = i["kind"], i.get("comment") or ""
+        if k in (bp.KIND_COUPON, bp.KIND_REDEEM) or (k == bp.KIND_DEPO and "выплат" in c.lower()):
+            m = bp.ISIN.search(c) or bp.ISIN.search(i.get("instr") or "")
+            isin = m.group(1) if m else next((x for n, x in by_name if n in c), "")
+            cash.append([i["date"], isin, k, i["amount"]])
+    fx = [[i["date"], i["kind"], i["instr"], i["amount"]] for i in r["items"]
+          if i["kind"] in (bp.KIND_FX_BUY, bp.KIND_FX_SELL)]
+    hold = {i: [_pname(h["name"], h["short"]), h["q0"], h["v0"], h["q1"], h["v1"]] for i, h in p["hold"].items()}
+    for i, (q0p, v0p, q1p, v1p) in (p.get("plan") or {}).items():   # плановый остаток: позиция + непоставленное
+        h = hold.setdefault(i, [_pname(names.get(i, ""), ""), 0.0, 0.0, 0.0, 0.0])
+        if v0p:
+            h[1], h[2] = q0p, h[2] + v0p
+        if v1p:
+            h[3], h[4] = q1p, h[4] + v1p
+    return {"hold": hold, "lend": p.get("lend", 0),
+            "tot": p["tot"], "trades": p["trades"], "comm": p["comm"], "moves": p["moves"], "cash": cash,
+            "fx": list(r.get("fx") or (0.0, 0.0)), "fx_flows": fx}
 
 
 def _load(path: str, cache_dir: str) -> dict:
@@ -169,7 +211,18 @@ def join_overlap(a: dict, b: dict) -> dict | None:
                       "equity": (a["equity"][1], b["equity"][1]), "go": (a["go"][1], b["go"][1]),
                       "req": (a["req"][1], b["req"][1]), "day_kind": cut(b["day_kind"]), "day_ins": cut(b["day_ins"]),
                       "broker_pfi": cut(b["broker_pfi"]), "lots_paid": lots,
-                      "lots_open": cut(b["lots_open"]), "go_ch": cut(b["go_ch"]), "joined": len(over)})
+                      "lots_open": cut(b["lots_open"]), "go_ch": cut(b["go_ch"]), "joined": len(over),
+                      "papers": _cut_papers(b.get("papers"), a["to"])})
+
+
+def _cut_papers(p: dict | None, edge: str) -> dict | None:
+    """Бумаги второй справки после склейки: деньги и движения — со дня после стыка; сделки — все (дедуп по номеру
+    сделки в Account), позиции — как есть (на начало берутся из первой справки)."""
+    if not p:
+        return p
+    return dict(p, comm={d: v for d, v in p["comm"].items() if d > edge},
+                moves=[m for m in p["moves"] if m[0] > edge], cash=[c for c in p["cash"] if c[0] > edge],
+                fx_flows=[f for f in p["fx_flows"] if f[0] > edge])
 
 
 class Account:
@@ -223,6 +276,7 @@ class Account:
                     for c, (q, k) in cv.items():
                         self.lots[d][c][0] += q
                         self.lots[d][c][1] += k
+        self._papers_init(kept)
         self.first = kept[0]["from"] if kept else None
         self.last = kept[-1]["to"] if kept else None
         self._daily()
@@ -467,6 +521,116 @@ class Account:
                          "net": round(unalloc, 2), "lots": 0, "deals": 0, "per_lot": None, "cost_share": None})
         rows.sort(key=lambda r: r["net"])
         return rows
+
+
+def _papers_init(self, kept):
+    """Бумаги счёта: позиции на границах справок (как точки стоимости), сделки без повторов по номеру."""
+    self.p_at, self.p_names, self.p_trades = {}, {}, {}
+    self.p_comm, self.p_moves, self.p_cash, self.p_fx = defaultdict(float), [], [], []
+    self.unknown, self.p_lend = defaultdict(int), 0
+    for r in kept:
+        p = r.get("papers") or {}
+        for k, v in (r.get("unknown") or {}).items():
+            self.unknown[k] += v
+        hold = p.get("hold", {})
+        for i, h in hold.items():
+            if h[0]:
+                self.p_names[i] = h[0]
+        fx = p.get("fx") or [0.0, 0.0]
+        tot = p.get("tot") or [0.0, 0.0]                         # ИТОГО позиций брокера (без плановой части)
+        self.p_at.setdefault(bp.day_before(r["from"]), ({i: (h[1], h[2]) for i, h in hold.items()}, tot[0], fx[0]))
+        self.p_at[r["to"]] = ({i: (h[3], h[4]) for i, h in hold.items()}, tot[1], fx[1])
+        self.p_lend += p.get("lend", 0)
+        for no, t in (p.get("trades") or {}).items():
+            if no not in self.p_trades or (t[5] and not self.p_trades[no][5]):
+                self.p_trades[no] = t
+        for d, v in (p.get("comm") or {}).items():
+            self.p_comm[d] += v
+        self.p_moves += p.get("moves", [])
+        self.p_cash += p.get("cash", [])
+        self.p_fx += p.get("fx_flows", [])
+
+
+def _securities(self, a: str, b: str):
+    """Ценные бумаги за интервал между точными точками (концами справок), по ISIN.
+    Результат = оценка на конец − на начало + продажи − покупки + погашения + купоны/дивиденды + депозитарий за выплату
+    + комиссия брокера (дневная комиссия по бумагам делится по объёму сделок дня). Позиция на границе — «плановый
+    остаток» брокера (позиция + непоставленное по сделкам + выданное в займ ЦБ), оценка — позиция + плановая часть;
+    поэтому сделки — по дате сделки, а займ ЦБ брокеру в количестве не участвует. Купоны и погашения — по дате оплаты.
+    Проверка количества: на начало + куплено − продано + зачислено − списано = на конец."""
+    if not self.points:
+        return None
+    pS, pE = self.point_at(bp.day_before(a)), self.point_at(b)
+    if pE[0] <= pS[0]:
+        return None
+    inside = lambda d: d and pS[0] < d <= pE[0]  # noqa: E731
+    h0, t0, fx0 = self.p_at.get(pS[0], ({}, 0.0, 0.0))
+    h1, t1, fx1 = self.p_at.get(pE[0], ({}, 0.0, 0.0))
+    z = lambda: {"q0": 0.0, "v0": 0.0, "bq": 0.0, "b": 0.0, "sq": 0.0, "s": 0.0, "red": 0.0, "inc": 0.0,  # noqa: E731
+                 "depo": 0.0, "comm": 0.0, "mq": 0.0, "q1": 0.0, "v1": 0.0, "deals": 0}
+    g = defaultdict(z)
+    for i, (q, v) in h0.items():
+        g[i]["q0"], g[i]["v0"] = q, v
+    for i, (q, v) in h1.items():
+        g[i]["q1"], g[i]["v1"] = q, v
+    vol = defaultdict(lambda: defaultdict(float))
+    for t in self.p_trades.values():
+        d, i, side, q, money = t[:5]                             # по дате сделки: позиция — плановый остаток
+        if not inside(d):
+            continue
+        x = g[i]
+        x["deals"] += 1
+        if side > 0:
+            x["bq"] += q
+            x["b"] += -money
+        else:
+            x["sq"] += q
+            x["s"] += money
+        vol[d][i] += abs(money)                                  # комиссия брокера датирована днём сделки
+    unalloc = 0.0
+    for d, v in self.p_comm.items():
+        if not inside(d):
+            continue
+        tot = sum(vol[d].values())
+        if not tot:
+            unalloc += v
+            continue
+        for i, w in vol[d].items():
+            g[i]["comm"] += v * w / tot
+    for d, i, _op, cr, db in self.p_moves:
+        if inside(d):
+            g[i]["mq"] += cr - db
+    cash_un = 0.0
+    for d, i, k, amt in self.p_cash:
+        if not inside(d):
+            continue
+        if not i:
+            cash_un += amt
+            continue
+        g[i]["red" if k == bp.KIND_REDEEM else "depo" if k == bp.KIND_DEPO else "inc"] += amt
+    rows = []
+    for i, x in g.items():
+        res = x["v1"] - x["v0"] + x["s"] - x["b"] + x["red"] + x["inc"] + x["depo"] + x["comm"]
+        dq = x["q0"] + x["bq"] - x["sq"] + x["mq"] - x["q1"]
+        if not any(abs(x[k]) > 1e-9 for k in ("q0", "q1", "bq", "sq", "red", "inc", "mq")):
+            continue
+        rows.append({"name": self.p_names.get(i, i), "isin": i, **{k: round(v, 2) for k, v in x.items()},
+                     "result": round(res, 2), "dq": round(dq, 6), "ok": abs(dq) < 1e-6})
+    rows.sort(key=lambda r: (-abs(r["result"]), r["name"]))
+    fxb = sum(f[3] for f in self.p_fx if inside(f[0]) and f[1] == bp.KIND_FX_BUY)
+    fxs = sum(f[3] for f in self.p_fx if inside(f[0]) and f[1] == bp.KIND_FX_SELL)
+    fx = None
+    if fxb or fxs or fx0 or fx1:
+        fx = {"name": "Валюта (по курсу ЦБ)", "isin": ", ".join(sorted({f[2] for f in self.p_fx if inside(f[0])})),
+              "v0": round(fx0, 2), "b": round(-fxb, 2), "s": round(fxs, 2), "v1": round(fx1, 2),
+              "result": round(fx1 - fx0 + fxs + fxb, 2), "ok": True}
+    return {"rows": rows, "fx": fx, "from": pS[0], "to": pE[0], "tot0": t0, "tot1": t1, "lend": self.p_lend,
+            "comm_unalloc": round(unalloc, 2), "cash_unalloc": round(cash_un, 2),
+            "bad": [r["name"] for r in rows if not r["ok"]], "unknown": dict(self.unknown)}
+
+
+Account._papers_init = _papers_init
+Account.securities = _securities
 
 
 class Store:
