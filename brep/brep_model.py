@@ -24,7 +24,7 @@ from collections import defaultdict
 
 from . import brep_parse as bp
 
-CACHE_V = 1
+CACHE_V = 2          # 2: lots_late — сделки, оплаченные позже даты сделки (склейка справок)
 INCOME = (bp.KIND_COUPON, bp.KIND_INTEREST)
 FLOWS = (bp.KIND_IN, bp.KIND_OUT, bp.KIND_TR)
 
@@ -44,12 +44,17 @@ def compact(r: dict) -> dict:
             broker_pfi[i["date"]] += i["amount"]
     lots_paid = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))       # дата сделки → код → [лоты, сделки]
     lots_open = defaultdict(lambda: defaultdict(lambda: [0.0, 0]))
+    lots_late = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: [0.0, 0])))   # оплата → дата сделки → код
     for t in r["trades"].values():
         if not t["date"]:
             continue
         g = (lots_paid if t["paid"] else lots_open)[t["date"]][t["code"]]
         g[0] += t["qty"]
         g[1] += 1
+        if t["paid"] and t["paid"] > t["date"]:
+            x = lots_late[t["paid"]][t["date"]][t["code"]]
+            x[0] += t["qty"]
+            x[1] += 1
     go = defaultdict(float)
     for d, v in r["go_changes"]:
         go[d] += v
@@ -62,6 +67,7 @@ def compact(r: dict) -> dict:
         "broker_pfi": {d: rnd(v) for d, v in broker_pfi.items()},
         "lots_paid": {d: {c: v for c, v in cv.items()} for d, cv in lots_paid.items()},
         "lots_open": {d: {c: v for c, v in cv.items()} for d, cv in lots_open.items()},
+        "lots_late": {p: {d: {c: v for c, v in cv.items()} for d, cv in dv.items()} for p, dv in lots_late.items()},
         "go_ch": {d: rnd(v) for d, v in go.items()},
     }
 
@@ -148,10 +154,21 @@ def join_overlap(a: dict, b: dict) -> dict | None:
     if abs(b["equity"][0] + money - a["equity"][1]) > 1.0:
         return None
     cut = lambda m: {d: v for d, v in m.items() if d > a["to"]}  # noqa: E731
+    # сделки второй справки, оплаченные ПОСЛЕ стыка, в первой отсутствуют (кабинет «по 31.12» не показывает сделку
+    # вечера 30.12 с оплатой 05.01) — их лоты остаются, хотя дата сделки до стыка; оплаченные в дни стыка есть в первой
+    lots = {d: {c: list(v) for c, v in cv.items()} for d, cv in cut(b["lots_paid"]).items()}
+    for p, dv in b.get("lots_late", {}).items():
+        if p > a["to"]:
+            for d, cv in dv.items():
+                if d <= a["to"]:
+                    for c, (q, k) in cv.items():
+                        x = lots.setdefault(d, {}).setdefault(c, [0.0, 0])
+                        x[0] += q
+                        x[1] += k
     return dict(b, **{"from": (dt.date.fromisoformat(a["to"]) + dt.timedelta(days=1)).isoformat(),
                       "equity": (a["equity"][1], b["equity"][1]), "go": (a["go"][1], b["go"][1]),
                       "req": (a["req"][1], b["req"][1]), "day_kind": cut(b["day_kind"]), "day_ins": cut(b["day_ins"]),
-                      "broker_pfi": cut(b["broker_pfi"]), "lots_paid": cut(b["lots_paid"]),
+                      "broker_pfi": cut(b["broker_pfi"]), "lots_paid": lots,
                       "lots_open": cut(b["lots_open"]), "go_ch": cut(b["go_ch"]), "joined": len(over)})
 
 

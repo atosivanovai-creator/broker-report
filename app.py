@@ -24,7 +24,7 @@ import zipfile
 from flask import Flask, Response, abort, redirect, request
 
 APP = "BrokerReport"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
