@@ -1,0 +1,34 @@
+name: Ошибка
+description: Программа считает неверно, падает или не делает то, что должна
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Не прикладывайте настоящие справки, ключи API и номера счетов.** Если ошибка в разборе справки —
+        обезличьте её (номер счёта, ФИО, суммы), см. CONTRIBUTING.md. Уязвимости — по SECURITY.md, не сюда.
+  - type: input
+    id: version
+    attributes:
+      label: Версия BrokerReport
+      description: Видна в шапке страницы «Счета» (например 1.0.4)
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: Windows 11 23H2
+  - type: textarea
+    id: what
+    attributes:
+      label: Что делали и что увидели
+      description: Шаги, ожидаемый и фактический результат, скриншот (без номеров счетов)
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Текст ошибки
+      description: Из консольного окна программы или из api.log (папка данных). Ключи и номера счетов замажьте.
+      render: text

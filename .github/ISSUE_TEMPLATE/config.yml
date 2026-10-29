@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Сообщить об уязвимости (закрыто)
+    url: https://github.com/atosivanovai-creator/broker-report/security/advisories/new
+    about: Уязвимости — не в публичные задачи, а закрытым сообщением.

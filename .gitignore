@@ -3,3 +3,12 @@ __pycache__/
 build/
 dist/
 *.pyc
+.pytest_cache/
+*.log
+*.part
+# данные программы и справки не коммитятся никогда
+reports/
+cache/
+api.json
+api-state.json
+*.xls
