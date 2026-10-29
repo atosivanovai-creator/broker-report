@@ -77,6 +77,15 @@ def main():
                     "--workpath", os.path.join(ROOT, "build"), "--specpath", os.path.join(ROOT, "build"),
                     os.path.join(ROOT, "app.py")], check=True, cwd=ROOT)
     out = os.path.join(dist, APP)
+    # фоновая автозагрузка для Планировщика Windows: отдельный маленький exe БЕЗ окна консоли (только stdlib)
+    fetch_dist = os.path.join(ROOT, "build", "fetch-dist")
+    shutil.rmtree(fetch_dist, ignore_errors=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--name", "BrokerReportFetch",
+                    "--onefile", "--windowed", "--exclude-module", "dash", "--exclude-module", "flask",
+                    "--exclude-module", "plotly", "--distpath", fetch_dist,
+                    "--workpath", os.path.join(ROOT, "build", "fetch"), "--specpath", os.path.join(ROOT, "build"),
+                    os.path.join(ROOT, "finam_fetch.py")], check=True, cwd=ROOT)
+    shutil.copy(os.path.join(fetch_dist, "BrokerReportFetch.exe"), os.path.join(out, "BrokerReportFetch.exe"))
     shutil.copy(os.path.join(ROOT, "LICENSE"), os.path.join(out, "LICENSE.txt"))
     shutil.copy(os.path.join(ROOT, "README.md"), os.path.join(out, "README.txt"))
     pk = notices(os.path.join(out, "THIRD-PARTY-NOTICES.txt"))

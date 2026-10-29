@@ -25,7 +25,8 @@ from collections import defaultdict
 
 from . import brep_parse as bp
 
-CACHE_V = 3          # 2: lots_late (склейка справок); 3: papers — бумаги по ISIN, валюта, unknown; req без денег по бумагам
+CACHE_V = 4          # 4: НДФЛ с процентов на остаток — днём выплаты, проценты «к выплате» (28.10.2026)
+# прежние версии: 2: lots_late (склейка справок); 3: papers — бумаги по ISIN, валюта, unknown; req без денег по бумагам
 INCOME = (bp.KIND_COUPON, bp.KIND_INTEREST)
 FLOWS = (bp.KIND_IN, bp.KIND_OUT, bp.KIND_TR)
 

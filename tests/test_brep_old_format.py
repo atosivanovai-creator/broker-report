@@ -65,3 +65,18 @@ def test_nontrade_kind_14_4_and_fee_correction():
 def test_transfer_out_reconciles_as_withdrawal():
     r = {"items": [{"kind": bp.KIND_TR, "amount": -500.0}], "flows": {"wd": 500.0}}
     assert bp.reconcile(r)["wd"] == (-500.0, -500.0, 0.0)
+
+
+def test_interest_tax_dated_and_gross():
+    """Налог с процентов на остаток — днём выплаты; проценты — «к выплате»; сверка без разниц."""
+    html = _report().replace(
+        "Вознаграждение по пункту 14.4 Регламента (НДФЛ за 2021 год удержан)",
+        "Вознаграждение по пункту 14.4 Регламента (НДФЛ за 2021 год удержан) Из суммы к выплате 115.00 руб. удержан налог 15.00")
+    html = html.replace("<td>0,00</td><td>0,00</td><td>100,00</td></tr>", "<td>0,00</td><td>-15,00</td><td>100,00</td></tr>", 1)
+    r = bp.parse_report(html, "iis_2021-10-01..2021-12-31.xls")
+    assert r["flows"]["tax_withheld"] == -15.0 and r["flows"]["other"] == 100.0
+    it = [(i["date"], i["kind"], i["amount"], i["comment"]) for i in r["items"] if i["kind"] in (bp.KIND_INTEREST, bp.KIND_TAX)]
+    assert it == [("2021-10-31", bp.KIND_INTEREST, 115.0, it[0][3]), ("2021-10-31", bp.KIND_TAX, -15.0, bp.TAX_INTEREST)]
+    rec = bp.reconcile(r)
+    assert {k: v for k, v in rec.items() if abs(v[2]) > 0.005} == {}, rec           # «иное» 115 − 15 = 100, налог −15
+

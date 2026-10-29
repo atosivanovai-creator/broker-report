@@ -46,6 +46,11 @@ KIND_IN, KIND_OUT, KIND_TR = "Ввод", "Вывод", "Перевод межд�
 KIND_VM, KIND_EXCH, KIND_BROKER = "Вариационная маржа", "Биржевой сбор", "Комиссия брокера"
 KIND_DEPO, KIND_TAX = "Депозитарий", "Налог (НДФЛ)"
 KIND_COUPON, KIND_INTEREST = "Доход: купоны, дивиденды", "Доход: проценты"
+# НДФЛ, удержанный брокером при выплате дохода (в строке выплаты: «Из суммы к выплате X руб. удержан налог Y»).
+# Купоны: брокер в итогах «НКД/доход» — до налога. Проценты на остаток (п.14.4): в итогах «иное» — ПОСЛЕ налога
+# (зачислено X − Y); налог — в итогах «НДФЛ удержано» одной суммой без даты (доход
+# показывать «к выплате», налог — днём выплаты, а не одной строкой в конце справки).
+TAX_WITHHELD, TAX_INTEREST = "удержан при выплате дохода", "удержан с процентов на остаток (п.14.4)"
 KIND_SEC_BUY, KIND_SEC_SELL, KIND_REDEEM, KIND_OTHER = "Бумаги: покупка", "Бумаги: продажа", "Бумаги: погашение", "Прочее"
 KIND_FX_BUY, KIND_FX_SELL = "Валюта: покупка", "Валюта: продажа"
 
@@ -133,9 +138,10 @@ def parse_report(text: str, name: str = "") -> dict:
         comment = row[-1]
         kind = _nontrade_kind(row[1], comment, amount)
         wt = re.search(r"удержан налог\s*([\d\s.,]+)", comment, re.I)
-        if kind == KIND_COUPON and wt and num(wt.group(1)):
+        if kind in (KIND_COUPON, KIND_INTEREST) and wt and num(wt.group(1)):
             add(iso(row[0]), kind, amount + num(wt.group(1)), row[2], comment, "неторговые")
-            add(iso(row[0]), KIND_TAX, -num(wt.group(1)), row[2], "удержан при выплате дохода", "неторговые")
+            add(iso(row[0]), KIND_TAX, -num(wt.group(1)), row[2], TAX_INTEREST if kind == KIND_INTEREST else TAX_WITHHELD,
+                "неторговые")
             continue
         add(iso(row[0]), kind, amount, row[2], comment or row[1], "неторговые")
     # Торговые движения ПФИ
@@ -203,9 +209,9 @@ def parse_report(text: str, name: str = "") -> dict:
             r["unknown"]["валюта: " + op] = r["unknown"].get("валюта: " + op, 0) + 1
     # налог, удержанный при выплате дохода, которого нет в датированных строках, — итогом справки на её последний день
     rest = f.get("tax_withheld", 0.0) - sum(i["amount"] for i in items if i["kind"] == KIND_TAX
-                                            and i["comment"] == "удержан при выплате дохода")
+                                            and i["comment"] in (TAX_WITHHELD, TAX_INTEREST))
     if abs(rest) > 0.005:
-        add(r["to"], KIND_TAX, rest, "", "удержан при выплате дохода; в справке только итогом за период, без даты", "итог справки")
+        add(r["to"], KIND_TAX, rest, "", TAX_WITHHELD + "; в справке только итогом за период, без даты", "итог справки")
     r["fx"] = pick("Оценка валютной")
     r["papers"] = papers(tabs, r)
     return r
@@ -281,6 +287,8 @@ def reconcile(r: dict) -> dict:
         ours = sum(i["amount"] for i in r["items"] if i["kind"] in kinds)
         if k in ("dep", "wd"):        # «Перевод ДС» между своими счетами брокер в итогах считает вводом / выводом
             ours += sum(i["amount"] for i in r["items"] if i["kind"] == KIND_TR and (i["amount"] > 0) == (k == "dep"))
+        if k == "other":              # проценты на остаток у брокера в «иное» — после удержанного с них налога
+            ours += sum(i["amount"] for i in r["items"] if i["kind"] == KIND_TAX and i["comment"] == TAX_INTEREST)
         theirs = r["flows"].get(k, 0.0)
         if k == "wd":
             theirs = -abs(theirs)
