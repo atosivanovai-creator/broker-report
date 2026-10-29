@@ -47,6 +47,23 @@ def test_trading_key_refused_readonly_accepted(api):
     assert ff.add_key(api.base, TRADE, allow_trading=True)["readonly"] is False
 
 
+def test_readonly_denied_says_what_to_do_then_trading_key_works(api):
+    """Брокер отказал ключу «только просмотр» — понятная ошибка с советом, квота не тратится, повтор при следующем
+    запуске; торговый ключ с явным разрешением загружает справки."""
+    api.deny_readonly = True
+    ff.add_key(api.base, RO)
+    st = ff.run_once(api.base)
+    assert st[ACC]["result"] == "fail" and "done_on" not in st[ACC]
+    assert "только просмотр" in st[ACC]["msg"] and "Разрешить торговый ключ" in st[ACC]["msg"]
+    assert api.quota == 3 and api.orders == [] and _files(api) == []
+    assert "Разрешить торговый ключ" in Path(api.base, "api.log").read_text(encoding="utf-8")
+    cfg = ff.load_cfg(api.base)
+    ff.remove_key(api.base, cfg["keys"][0]["id"])
+    ff.add_key(api.base, TRADE, "торговый", allow_trading=True)
+    st = ff.run_once(api.base)                                     # с 1 января — 4 куска, квота 3: 3 справки
+    assert len(api.orders) == 3 and len(_files(api)) == 3 and "квота" in st[ACC]["msg"]
+
+
 def test_request_only_while_previous_failed(api, monkeypatch):
     ff.add_key(api.base, RO)
     # 1-й запуск: справок нет — с 1 января по вчера кусками ≤92 дней, квота 3 кончается на 4-м куске → неудача

@@ -226,11 +226,12 @@ def api_html(base: str, busy: bool) -> str:
             "<input class=inp type=password name=secret placeholder='Ключ Trade API (secret key)' required "
             "autocomplete=new-password spellcheck=false>"
             "<input class=inp name=label placeholder='Название ключа — необязательно' maxlength=60>"
-            "<label class=chk><input type=checkbox name=trading value=1> Разрешить торговый ключ (не рекомендуется: "
-            "для отчёта хватает ключа «только просмотр»)</label>"
+            "<label class=chk><input type=checkbox name=trading value=1> Разрешить торговый ключ — только если брокер "
+            "не выдаёт справки по ключу «только просмотр» (программа заявок не выставляет)</label>"
             "<div><button class=btn>Подключить ключ</button></div></form>")
     how = (f"<ol class=how><li>Откройте портал <a href='{PORTAL}' target=_blank rel=noopener>Finam Trade API</a> → "
-           "«Токены» → создайте ключ.</li><li>Доступ — <b>только просмотр</b>, отметьте нужные счета.</li>"
+           "«Токены» → создайте ключ.</li><li>Доступ — <b>только просмотр</b> (рекомендуется), отметьте нужные счета. "
+           "Если брокер по нему откажет, программа покажет ошибку — тогда создайте торговый ключ.</li>"
            "<li>Скопируйте ключ и вставьте сюда.</li></ol><p class='mut small'>Ключ хранится на этом компьютере "
            "зашифрованным средствами Windows и больше нигде не показывается. Брокер даёт 3 заказа справок в сутки "
            "на клиента; программа тратит не больше одного в день на счёт.</p>")

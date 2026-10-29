@@ -2,6 +2,14 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [Unreleased]
+
+### Изменено
+- Если брокер отказал в справке по ключу «только просмотр», программа прямо пишет, что делать: создать ключ
+  с правом торговли и подключить его с отметкой «Разрешить торговый ключ». Квота при таком отказе не тратится.
+- Подсказки в блоке «Автозагрузка» и README: ключ «только просмотр» — рекомендуемый, торговый — если брокер
+  откажет по нему в справке.
+
 ## [1.0.4] — 2026-10-29
 
 ### Добавлено
@@ -43,6 +51,7 @@
 
 - Первая версия.
 
+[Unreleased]: https://github.com/atosivanovai-creator/broker-report/compare/v1.0.4...HEAD
 [1.0.4]: https://github.com/atosivanovai-creator/broker-report/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/atosivanovai-creator/broker-report/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/atosivanovai-creator/broker-report/compare/v1.0.1...v1.0.2

@@ -12,8 +12,9 @@
   * перед заказом — GET /v1/usage; остаток 0 — не заказываем.
 
 Ключ (secret key) хранится зашифрованным средствами Windows (DPAPI: расшифровать может только этот пользователь
-на этом компьютере), в окне и журнале не показывается. Ключи с правом торговли не принимаются (поле readonly
-в /v1/sessions/details), если человек явно не разрешил. Заявок модуль не выставляет и таких методов не содержит:
+на этом компьютере), в окне и журнале не показывается. Рекомендуется ключ «только просмотр»; ключи с правом торговли
+(поле readonly в /v1/sessions/details) не принимаются, если человек явно не разрешил, — это нужно, только если брокер
+не выдаёт справки по ключу «только просмотр» (такой отказ показывается отдельной понятной ошибкой). Заявок модуль не выставляет и таких методов не содержит:
 только вход, сведения о ключе, квота, заказ и чтение справки.
 
 Только стандартная библиотека Python. Запуск без окна: BrokerReportFetch.exe --data <каталог данных>.
@@ -105,6 +106,15 @@ class ApiError(Exception):
     pass
 
 
+class ReportDenied(ApiError):
+    """Брокер отказал в заказе справки по правам ключа (http 403 или ответ про readonly/права)."""
+
+
+READONLY_DENIED = ("брокер не выдаёт справку по ключу «только просмотр». Чтобы справки загружались сами, создайте "
+                   "на портале Trade API ключ с правом торговли и подключите его с отметкой «Разрешить торговый ключ» "
+                   "(программа заявок не выставляет), а ключ «только просмотр» удалите")
+
+
 HUMAN = {401: "ключ недействителен, истёк или отозван", 403: "у ключа нет доступа к этому счёту",
          404: "счёт или справка не найдены у брокера", 429: "брокер просит обращаться реже",
          500: "ошибка на стороне брокера", 503: "сервис брокера недоступен", 504: "сервис брокера не ответил вовремя"}
@@ -162,6 +172,9 @@ class Api:
         body = {"account_id": acc, "report_form": "REPORT_FORM_LONG",
                 "date_range": {"date_begin": f"{d0}T00:00:00Z", "date_end": f"{d1}T12:00:00Z"}}
         st, j = self._call("POST", "/v1/report", body)
+        err = str(j.get("_error", "")).lower() if st != 200 else ""
+        if st == 403 or any(w in err for w in ("readonly", "read only", "read-only", "permission")):
+            raise ReportDenied(f"заказ справки: брокер отказал по правам ключа (http {st})")
         rid = self._need(st, j, "заказ справки").get("report_id")
         if not rid:
             raise ApiError("заказ справки: брокер не вернул номер заказа")
@@ -239,8 +252,9 @@ def add_key(base: str, secret: str, label: str = "", allow_trading: bool = False
     if not ids:
         raise ApiError("у ключа нет ни одного счёта — при создании ключа отметьте нужные счета")
     if not ro and not allow_trading:
-        raise ApiError("ключ ТОРГОВЫЙ (может выставлять заявки). Для отчёта достаточно ключа «только просмотр» — "
-                       "создайте такой на портале Trade API; торговый ключ программа не принимает")
+        raise ApiError("ключ ТОРГОВЫЙ (может выставлять заявки). Рекомендуется ключ «только просмотр» — создайте "
+                       "такой на портале Trade API. Торговый ключ подключается только с отметкой «Разрешить торговый "
+                       "ключ» — если брокер не выдаёт справки по ключу «только просмотр»")
     cfg = load_cfg(base)
     fp = hashlib.sha256(secret.encode()).hexdigest()[:16]
     cfg["keys"] = [k for k in cfg["keys"] if k.get("fp") != fp]
@@ -408,6 +422,8 @@ def run_once(base: str, reason: str = "schedule") -> dict:
                     continue
                 try:
                     fetch_account(api, base, a, st, today)
+                except ReportDenied as e:
+                    st.setdefault(a, {}).update(result="fail", msg=(READONLY_DENIED if d.get("readonly") else str(e)))
                 except ApiError as e:
                     st.setdefault(a, {}).update(result="fail", msg=str(e))
                 log(base, f"{a}: {st[a].get('result')} — {st[a].get('msg')} ({reason})")

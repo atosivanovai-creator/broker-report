@@ -25,6 +25,7 @@ def spravka(d0: str, d1: str) -> bytes:
 class Fake:
     def __init__(self):
         self.quota, self.mode, self.orders, self.calls, self.reports = 3, "SUCCESS", [], [], {}
+        self.deny_readonly = False          # брокер не выдаёт справки по ключу «только просмотр» (http 403)
 
 
 def start(port: int = 0):
@@ -54,6 +55,8 @@ def start(port: int = 0):
             if self.path == "/v1/sessions/details":
                 return self._j(200, {"account_ids": [ACC], "readonly": body.get("token") == "jwt-" + RO})
             if self.path == "/v1/report" and self._auth():
+                if fk.deny_readonly and self.headers.get("Authorization") == "Bearer jwt-" + RO:
+                    return self._j(403, {"code": 7, "message": "permission denied: readonly token"})
                 if fk.quota <= 0:
                     return self._j(429, {"message": "quota"})
                 fk.quota -= 1
