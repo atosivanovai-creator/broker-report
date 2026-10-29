@@ -59,7 +59,7 @@ jobs:
         run: |
           $z = "dist/BrokerReport-$env:VER-win64.zip"
           $h = (Get-FileHash $z -Algorithm SHA256).Hash.ToLower()
-          "$h  BrokerReport-$env:VER-win64.zip" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS.txt", "$h  BrokerReport-$env:VER-win64.zip`n")
           Get-Content dist/SHA256SUMS.txt
       - name: Заметки к релизу из CHANGELOG
         shell: pwsh
