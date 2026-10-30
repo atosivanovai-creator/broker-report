@@ -634,6 +634,75 @@ Account._papers_init = _papers_init
 Account.securities = _securities
 
 
+# ── результат по источникам (окно «Графики», блок «Инструменты») ──
+PART_SEC, PART_FX, PART_INT = "Ценные бумаги", "Валюта", "Проценты на остаток"
+PART_REQ, PART_TAX, PART_ETC = "ВМ к оплате", "Налоги", "Прочие расходы"
+PARTS_FIXED = (PART_SEC, PART_FX, PART_INT, PART_REQ, PART_TAX, PART_ETC)
+
+
+def _parts_days(self) -> dict:
+    """{дата строки days: {источник: ₽}} за всю историю (считается один раз на объект счёта).
+    Сумма источников дня = прибыль дня по кривой стоимости (Δстоимости − ввод/вывод/переводы), поэтому за любой период
+    сумма = прибыль плашек и сводки. Источники:
+      • фьючерсы по базовому активу — ВМ оплаченная + биржа + брокер по лотам дня (как ins_days / «По инструментам»);
+      • ценные бумаги — купоны, депозитарий за выплату, комиссии по бумагам днём оплаты; переоценка и торговля (оценка
+        конца − начала + продажи + погашения − покупки) — на конце справки, где известна точная оценка (как «Ценные бумаги»);
+      • валюта — на конце справки; проценты брокера на остаток и налоги — днём оплаты;
+      • ВМ к оплате — Δ «оценки требований и обязательств» между концами справок (начислена клирингом, деньгами придёт
+        позже — тогда перейдёт в линию инструмента; сводка учитывает её в ВМ);
+      • прочие расходы — комиссии брокера вне сделок, депозитарий, «прочее» и остаток до прибыли дня (self.parts_gap —
+        наибольший остаток в день БЕЗ конца справки: должен быть ≈ 0)."""
+    if getattr(self, "_parts", None) is not None:
+        return self._parts
+    out = defaultdict(lambda: defaultdict(float))
+    self.parts_gap = 0.0
+    if not self.days or not self.points:
+        self._parts = out
+        return out
+    fut = self.ins_days("0000-00-00", "9999-99-99", True)
+    sec_day = defaultdict(float)
+    depo_pay = defaultdict(float)
+    for d, _i, k, amt in self.p_cash:
+        if k == bp.KIND_REDEEM:                                 # номинал — не доход: в переоценке на конце справки
+            continue
+        sec_day[d] += amt
+        if k == bp.KIND_DEPO:
+            depo_pay[d] += amt
+    for d, v in self.p_comm.items():
+        sec_day[d] += v
+    last_pt, prev = self.points[0]
+    for r in self.days:
+        d = r["date"]
+        k = self.kind.get(d, {})
+        o = out[d]
+        for c, v in fut.get(d, {}).items():
+            o[c] += sum(v)
+        o[PART_SEC] += sec_day.get(d, 0.0)
+        o[PART_INT] += k.get(bp.KIND_INTEREST, 0.0)
+        o[PART_TAX] += k.get(bp.KIND_TAX, 0.0)
+        o[PART_ETC] += (k.get(bp.KIND_BROKER, 0.0) - self.broker_pfi.get(d, 0.0) - self.p_comm.get(d, 0.0)
+                        + k.get(bp.KIND_DEPO, 0.0) - depo_pay.get(d, 0.0) + k.get(bp.KIND_OTHER, 0.0))
+        if r.get("exact") and d > last_pt:
+            o[PART_REQ] += self.req.get(d, 0.0) - self.req.get(last_pt, 0.0)
+            sec = self.securities(bp.day_after(last_pt), d)
+            if sec:
+                o[PART_SEC] += sum(x["result"] - x["inc"] - x["depo"] - x["comm"] for x in sec["rows"])
+                o[PART_FX] += sec["fx"]["result"] if sec["fx"] else 0.0
+        flow = (r.get("dep") or 0.0) + (r.get("wd") or 0.0) + (r.get("tr") or 0.0)
+        gap = r["equity"] - prev - flow - sum(o.values())
+        o[PART_ETC] += gap
+        if not r.get("exact"):
+            self.parts_gap = max(self.parts_gap, abs(gap))
+        prev = r["equity"]
+        if r.get("exact"):
+            last_pt = d
+    self._parts = out
+    return out
+
+
+Account.parts_days = _parts_days
+
+
 class Store:
     """Счёт окна: пересобирается, когда в каталоге справок что-то изменилось (новая справка, замена)."""
 

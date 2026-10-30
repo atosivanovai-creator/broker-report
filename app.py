@@ -25,7 +25,7 @@ import webbrowser
 from flask import Flask, abort, jsonify, redirect, request
 
 APP = "BrokerReport"
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 

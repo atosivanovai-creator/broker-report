@@ -318,36 +318,50 @@ def fig_costs(acc, s: dict, theme: str = "graphite") -> go.Figure:
     fig.update_yaxes(tickformat=",.0f", row=1, col=2, secondary_y=False)
     fig.update_yaxes(tickformat=",.1f", showgrid=False, rangemode="tozero", tickmode="auto", nticks=6, row=1, col=2,
                      secondary_y=True)
-    fig.update_xaxes(tickangle=0, row=1, col=1)
+    fig.update_xaxes(tickangle=None, row=1, col=1)   # авто: наклон только когда подписи каскада не помещаются (слипались на узком окне)
     fig.update_xaxes(tickformat="%m.%Y", row=1, col=2)
     fig.update_layout(legend=dict(x=1, xanchor="right", y=1.08), margin=dict(t=48))
     return fig
 
 
-def ins_series(acc, s: dict, top: int = 6) -> dict:
-    """Накопленный результат базовых активов после затрат (ВМ + биржа + брокер) по дням периода; крупнейшие top,
-    остальные — «прочие». Корзины столбцов — годы (период > 1 года) или месяцы."""
-    a, b = s["dates"][0], s["dates"][-1]
-    daily = acc.ins_days(a, b, True)
+OTHER_FUT = "прочие фьючерсы"
+TOTAL = "итого — прибыль счёта"
+PART_COLORS = {"Ценные бумаги": "#60a5fa", "Валюта": "#2dd4bf", "Проценты на остаток": "#e879f9",
+               "ВМ к оплате": "#a8a29e", "Налоги": "#f87171", "Прочие расходы": "#78716c"}
+
+
+def ins_series(acc, s: dict, top: int = 5) -> dict:
+    """Накопленный результат по источникам за период:
+    фьючерсы по базовому активу после затрат (крупнейшие top, остальные — «прочие фьючерсы»), ценные бумаги, валюта,
+    проценты на остаток, ВМ к оплате, налоги, прочие расходы (Account.parts_days). Сумма линий = прибыль периода
+    (= плашка «Прибыль»). Корзины столбцов — годы (период > 1 года) или месяцы."""
+    from brep.brep_model import PARTS_FIXED
+    parts = acc.parts_days()
+    dates = s["dates"]
     tot = {}
-    for cv in daily.values():
-        for k, v in cv.items():
-            tot[k] = tot.get(k, 0.0) + sum(v)
-    keys = sorted(tot, key=lambda k: -abs(tot[k]))
-    show = [k for k in keys[:top] if k != "без сделок в день списания"]
-    name = lambda k: k if k in show else OTHER_INS  # noqa: E731
-    names = show + ([OTHER_INS] if any(name(k) == OTHER_INS for k in keys) else [])
-    by_year = len({d[:4] for d in s["dates"]}) > 1
-    cum = {n: [] for n in names}
+    for d in dates:
+        for k, v in parts.get(d, {}).items():
+            tot[k] = tot.get(k, 0.0) + v
+    fut = sorted((k for k in tot if k not in PARTS_FIXED), key=lambda k: -abs(tot[k]))
+    show = [k for k in fut[:top] if k != "без сделок в день списания"]
+    used = {k for d in dates for k, v in parts.get(d, {}).items() if abs(v) >= 0.5}
+    name = lambda k: k if k in show or k in PARTS_FIXED else OTHER_FUT  # noqa: E731
+    names = show + ([OTHER_FUT] if any(name(k) == OTHER_FUT for k in fut if k in used) else [])         + [k for k in PARTS_FIXED if k in used]
+    by_year = len({d[:4] for d in dates}) > 1
+    cum = {n: [] for n in names + [TOTAL]}
     run = {n: 0.0 for n in names}
     buckets = {}
-    for d in s["dates"]:
-        for k, v in daily.get(d, {}).items():
-            run[name(k)] += sum(v)
-            bk = d[:4] if by_year else f"{MON_RU[int(d[5:7]) - 1]} {d[:4]}"
-            buckets.setdefault(bk, {n: 0.0 for n in names})[name(k)] += sum(v)
+    for d in dates:
+        bk = d[:4] if by_year else f"{MON_RU[int(d[5:7]) - 1]} {d[:4]}"
+        bb = buckets.setdefault(bk, {n: 0.0 for n in names})
+        for k, v in parts.get(d, {}).items():
+            n = name(k)
+            if n in run:
+                run[n] += v
+                bb[n] += v
         for n in names:
             cum[n].append(run[n])
+        cum[TOTAL].append(sum(run.values()))
     return {"names": names, "cum": cum, "buckets": buckets, "by_year": by_year, "total": tot}
 
 
@@ -359,17 +373,21 @@ def fig_ins(acc, s: dict, theme: str = "graphite") -> go.Figure:
     if not x["names"]:
         return _layout(go.Figure(), c, 120)
     fig = make_subplots(rows=2, cols=1, row_heights=[0.6, 0.4], vertical_spacing=0.13,
-                        subplot_titles=("Накопленный результат после затрат (ВМ + биржа + брокер), ₽",
+                        subplot_titles=("Накопленный результат по источникам после затрат, ₽ — сумма линий = прибыль счёта",
                                         "По годам, ₽" if x["by_year"] else "По месяцам, ₽"))
     bk = list(x["buckets"])
     for i, n in enumerate(x["names"]):
-        col = c["mut"] if n == OTHER_INS else PALETTE[i % len(PALETTE)]
-        fig.add_trace(go.Scatter(x=s["dates"], y=x["cum"][n], name=n, legendgroup=n, mode="lines", line=dict(color=col, width=1.8),
+        fixed = n in PART_COLORS
+        col = PART_COLORS[n] if fixed else c["mut"] if n == OTHER_FUT else PALETTE[i % len(PALETTE)]
+        fig.add_trace(go.Scatter(x=s["dates"], y=x["cum"][n], name=n, legendgroup=n, mode="lines",
+                                 line=dict(color=col, width=1.8, dash="dash" if fixed else None),
                                  hovertemplate=n + " %{y:,.0f} ₽<extra></extra>"), 1, 1)
         fig.add_trace(go.Bar(x=bk, y=[x["buckets"][b][n] for b in bk], name=n, legendgroup=n, showlegend=False, marker_color=col,
                              hovertemplate=n + " %{x}: %{y:,.0f} ₽<extra></extra>"), 2, 1)
+    fig.add_trace(go.Scatter(x=s["dates"], y=x["cum"][TOTAL], name=TOTAL, legendgroup=TOTAL, mode="lines",
+                             line=dict(color=c["txt"], width=2.4), hovertemplate="итого %{y:,.0f} ₽<extra></extra>"), 1, 1)
     tots = [sum(x["buckets"][b].values()) for b in bk]
-    fig.add_trace(go.Scatter(x=bk, y=tots, mode="markers+text", name="итого", showlegend=False,
+    fig.add_trace(go.Scatter(x=bk, y=tots, mode="markers+text", name="итого", showlegend=False, legendgroup=TOTAL,
                              marker=dict(symbol="line-ew", size=26, line=dict(color=c["txt"], width=2)),
                              text=[short(v) if abs(v) >= 1000 else "" for v in tots], textposition="top center",
                              textfont=dict(color=c["txt"], size=11), hovertemplate="итого %{x}: %{y:,.0f} ₽<extra></extra>"), 2, 1)
@@ -383,7 +401,10 @@ def fig_ins(acc, s: dict, theme: str = "graphite") -> go.Figure:
     fig.update_yaxes(tickformat=",.0f")
     fig.update_xaxes(tickformat="%m.%Y", row=1, col=1)
     fig.update_xaxes(type="category", row=2, col=1)
-    fig.update_layout(legend=dict(x=1, xanchor="right", y=1.04), margin=dict(t=48))
+    # легенда столбиком справа: горизонтальная при 10+ линиях переносилась в 2–3 ряда и легла на
+    # заголовок подграфика — Plotly недодал верхнее поле; справа ей не с чем пересечься при любой ширине и масштабе
+    fig.update_layout(legend=dict(orientation="v", x=1.01, xanchor="left", y=1, yanchor="top", tracegroupgap=3),
+                      margin=dict(t=40))
     return fig
 
 
@@ -447,8 +468,9 @@ def mount(server, url_base: str, account: str, store, report_url: str):
             ("Доходность по месяцам, %", "индекс доходности: конец месяца к концу прошлого; «год» — произведение месяцев периода",
              "c-months"),
             ("Затраты", "из чего сложилась прибыль периода; затраты брокера и биржи по месяцам и на один лот", "c-costs"),
-            ("Инструменты", "базовый актив срочного рынка; комиссия брокера за день делится по лотам дня, как во вкладке "
-                            "«По инструментам»", "c-ins"))],
+            ("Инструменты", "фьючерсы по базовому активу (комиссия брокера за день делится по лотам дня, как во "
+                            "вкладке «По инструментам»), ценные бумаги, валюта, проценты на остаток, налоги; переоценка "
+                            "бумаг и начисленная ВМ — на концах справок; сумма линий = прибыль", "c-ins"))],
         html.P("Доходность — индекс без влияния ввода и вывода (тот же расчёт, что «% за период» сводки отчёта): в начале "
                "выбранного периода 0 %. Стоимость счёта точна на концах справок (точки), между ними — оценка; на концах "
                "справок линия выравнивается к точной стоимости (переоценка бумаг/валюты).", className="hint"),

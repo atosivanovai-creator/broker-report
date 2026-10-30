@@ -12,6 +12,8 @@ from brep import brep_charts as bc, brep_model as bm, brep_parse as bp  # noqa: 
 def _acc(points, days, kind=None):
     a = bm.Account.__new__(bm.Account)
     a.points, a.kind, a.req, a.lots = points, kind or {}, {}, {}
+    bm._papers_init(a, [])                                       # бумаг нет: блок «Инструменты» считает и их
+    a.broker_pfi = {}
     a.days = [dict(dict(go=0.0, go_pct=None, tax=0.0, dep=0.0, wd=0.0, tr=0.0, exact=False, result=0.0), **d) for d in days]
     a.first, a.last = a.days[0]["date"], a.days[-1]["date"]
     return a
@@ -107,4 +109,10 @@ def test_ins_days_equal_instruments():
     assert tot == pytest.approx({r["instr"]: r["net"] for r in a.instruments("2024-01-01", "2024-12-31", True)})
     x = bc.ins_series(a, bc.series(a))
     assert x["cum"]["Si"][-1] == pytest.approx(100 - 3 - 6 + 10) and x["by_year"] is False
+    # «Инструменты» — по источникам: фьючерсы по базовому активу + прочее; итого = прибыль периода
+    # (75 − 100 + вывод 100 = 75), остаток вне фьючерсов — в «прочих расходах»
+    assert x["cum"]["CNY"][-1] == pytest.approx(-40 - 1 - 2)
+    assert x["cum"][bc.TOTAL][-1] == pytest.approx(75.0)
+    assert x["cum"][bc.TOTAL][-1] == pytest.approx(sum(v[-1] for k, v in x["cum"].items() if k != bc.TOTAL))
+    assert bc.fig_ins(a, bc.series(a)).data                       # график строится
 
